@@ -1,0 +1,24 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Secrets and local config: never commit these
+.env
+*.key
+
+# Workspace-local agent docs (DdS convention)
+docs/
