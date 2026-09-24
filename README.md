@@ -8,7 +8,9 @@ and data together.
 ## Add your model
 
 1. Fork this repository.
-2. Create `models/<your-model-name>/` (lowercase, dashes, no spaces).
+2. Create `hackathon/<your-model-name>/` (lowercase, dashes, no spaces).
+   Hackathon prototypes live under `hackathon/`; see its
+   [README](hackathon/README.md).
 3. Put your code and your data in it, plus a `README.md` that says:
    - what the model computes,
    - who built it,
