@@ -1,4 +1,5 @@
-# Schema for values.parquet — one row per (family member, slot) pair.
+# Schema for values.parquet — one row per exchange of a family member,
+# pointing at its slot (a member may use a slot more than once, see `seq`).
 # A family member is identified by its varying axes: location, time_tag,
 # or both at once. Absence of a row for a given (member, slot) means that
 # flow is not used by that member (implicit zero) — no separate sparsity
@@ -7,7 +8,7 @@
 
 table: values
 file: values.parquet
-primary_key: [process_id, slot_id]
+primary_key: [process_id, slot_id, seq]
 description: >
   The per-member numbers, referencing structure.parquet by slot_id.
   Replaces per-member duplication in exchanges.parquet: only ids and
@@ -45,6 +46,17 @@ columns:
     type: int
     required: true
     description: Joins to structure.parquet (family_id, slot_id).
+  - name: seq
+    type: int
+    required: true
+    description: >
+      0, 1, 2, ... among this member's rows for the same slot, in
+      exchanges.parquet order. Needed because (process_id, slot_id) is not
+      unique: a member often uses one slot through several links (e.g. the
+      same technology sourced from CH and from RER), and
+      exchanges.parquet itself repeats (process_id, flow) pairs and even
+      whole rows, so no data column (flow, link_location, amount, ...)
+      can tell the repeats apart.
   - name: flow
     type: string
     required: true

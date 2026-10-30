@@ -132,7 +132,7 @@
 
   <div class="panel">
     <h2>Technology-activation F1 score</h2>
-    <p class="note">Of the technologies the model turned on/off, how many matched reality — higher is better</p>
+    <p class="note">Of the technologies the model turned on/off, how many matched reality — higher is better. For comparison, switching on every technology used by at least half of the other members scores 0.804, above both anchors.</p>
     <div class="chart-row" id="f1-chart"></div>
     <details class="table-toggle">
       <summary>View as table</summary>
@@ -140,7 +140,7 @@
         <caption>F1 score by family and anchor mode</caption>
         <thead><tr><th>Family</th><th>Global</th><th>Regional</th></tr></thead>
         <tbody>
-          <tr><td>Electricity, production mix (81 locations)</td><td>0.598</td><td>0.589</td></tr>
+          <tr><td>Electricity, production mix (73 countries)</td><td>0.579</td><td>0.588</td></tr>
         </tbody>
       </table>
     </details>
@@ -156,7 +156,7 @@
         <caption>MAE by family and anchor mode</caption>
         <thead><tr><th>Family</th><th>Global</th><th>Regional</th></tr></thead>
         <tbody>
-          <tr><td>Electricity, production mix (81 locations)</td><td>0.0603</td><td>0.0564</td></tr>
+          <tr><td>Electricity, production mix (73 countries)</td><td>0.0592</td><td>0.0529</td></tr>
         </tbody>
       </table>
     </details>
@@ -169,12 +169,12 @@
       <div class="france-metric">
         <h3>F1 score</h3>
         <div class="slope" id="france-f1"></div>
-        <div class="improve-tag">▲ +0.152 (0.598 → 0.750)</div>
+        <div class="improve-tag">no change (0.769 → 0.769)</div>
       </div>
       <div class="france-metric">
         <h3>MAE</h3>
         <div class="slope" id="france-mae"></div>
-        <div class="improve-tag">▼ −0.0021 (0.0460 → 0.0439)</div>
+        <div class="improve-tag">▼ −0.0174 (0.0667 → 0.0493)</div>
       </div>
     </div>
   </div>
@@ -231,11 +231,11 @@
   }
 
   barGroup(document.getElementById('f1-chart'), [
-    { name: 'Electricity, production mix\n(81 locations)', global: 0.598, regional: 0.589 },
+    { name: 'Electricity, production mix\n(73 countries)', global: 0.579, regional: 0.588 },
   ], v => v.toFixed(3), 0.8);
 
   barGroup(document.getElementById('mae-chart'), [
-    { name: 'Electricity, production mix\n(81 locations)', global: 0.0603, regional: 0.0564 },
+    { name: 'Electricity, production mix\n(73 countries)', global: 0.0592, regional: 0.0529 },
   ], v => v.toFixed(4), 0.07);
 
   function slope(container, before, after, fmt, higherIsBetter) {
@@ -261,8 +261,8 @@
     `;
   }
 
-  slope(document.getElementById('france-f1'), 0.598, 0.750, v => v.toFixed(3), true);
-  slope(document.getElementById('france-mae'), 0.0460, 0.0439, v => v.toFixed(4), false);
+  slope(document.getElementById('france-f1'), 0.769, 0.769, v => v.toFixed(3), true);
+  slope(document.getElementById('france-mae'), 0.0667, 0.0493, v => v.toFixed(4), false);
 })();
 </script>
 </body>

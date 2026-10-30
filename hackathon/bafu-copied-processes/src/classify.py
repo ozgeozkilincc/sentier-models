@@ -18,39 +18,15 @@ See README.md for setup. Data root resolution: BAFU_DATA_ROOT env var,
 --------------------------------------------------------------------------
 """
 import argparse
-import glob
 import os
+import sys
 
 import numpy as np
 import pandas as pd
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-TOOLKIT_ROOT = os.path.dirname(THIS_DIR)
-DEFAULT_REPO = os.path.join(TOOLKIT_ROOT, "sentier-inventory")
-REPO = os.environ.get("BAFU_DATA_ROOT", DEFAULT_REPO)
-
-
-def load(repo=None):
-    repo = repo or REPO
-    if not os.path.isdir(repo):
-        raise FileNotFoundError(
-            f"sentier-inventory not found at: {repo}\n"
-            f"Clone it first: git clone https://github.com/sentier-dev/sentier-inventory\n"
-            f"...and place the 'sentier-inventory' folder next to bafu-copied-processes/src/, "
-            f"or set BAFU_DATA_ROOT / pass --data-root."
-        )
-    all_p, all_e = [], []
-    for d in sorted(glob.glob(os.path.join(repo, "data", "*/"))):
-        sector = os.path.basename(d.rstrip("/"))
-        if sector == "99-obsolete":
-            continue
-        p = pd.read_parquet(d + "processes.parquet")
-        p["sector"] = sector
-        e = pd.read_parquet(d + "exchanges.parquet")
-        e["sector"] = sector
-        all_p.append(p)
-        all_e.append(e)
-    return pd.concat(all_p, ignore_index=True), pd.concat(all_e, ignore_index=True)
+sys.path.insert(0, THIS_DIR)
+from model import load  # noqa: E402  (same loader and data-layout check as model.py)
 
 
 def classify(repo=None):

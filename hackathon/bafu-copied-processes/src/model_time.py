@@ -31,7 +31,7 @@ import pandas as pd
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, THIS_DIR)
-from model import STRUCT_COLS, VALUE_COLS, compare_rows  # noqa: E402
+from model import STRUCT_COLS, VALUE_COLS, check_data_layout, compare_rows  # noqa: E402
 
 TOOLKIT_ROOT = os.path.dirname(THIS_DIR)
 DEFAULT_REPO = os.path.join(TOOLKIT_ROOT, "sentier-inventory")
@@ -49,13 +49,7 @@ def split_time(name: str):
 
 def load_sector(sector, repo=None):
     repo = repo or REPO
-    if not os.path.isdir(repo):
-        raise FileNotFoundError(
-            f"sentier-inventory not found at: {repo}\n"
-            f"Clone it first: git clone https://github.com/sentier-dev/sentier-inventory\n"
-            f"...and place the 'sentier-inventory' folder next to bafu-copied-processes/src/, "
-            f"or set BAFU_DATA_ROOT / pass --data-root."
-        )
+    check_data_layout(repo)
     d = os.path.join(repo, "data", sector)
     p = pd.read_parquet(os.path.join(d, "processes.parquet"))
     e = pd.read_parquet(os.path.join(d, "exchanges.parquet"))
@@ -81,7 +75,8 @@ def build_time_family(P, E, base_name):
     structure.insert(0, "slot_id", range(len(structure)))
 
     values = ex.merge(structure, on=STRUCT_COLS, how="left")
-    values = values[["process_id", "location", "time_tag", "slot_id"] + VALUE_COLS]
+    values["seq"] = values.groupby(["process_id", "slot_id"]).cumcount()  # see model.py build_family
+    values = values[["process_id", "location", "time_tag", "slot_id", "seq"] + VALUE_COLS]
     return structure, values, procs
 
 

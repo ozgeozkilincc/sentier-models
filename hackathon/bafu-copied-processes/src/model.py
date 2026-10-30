@@ -50,12 +50,20 @@ STRUCT_COLS = ["flow_name", "direction", "flow_type", "unit"]
 
 # Columns that must match exactly (as strings) for a round-trip to count as OK.
 _EXACT_COLS = ["flow", "flow_name", "flow_type", "direction", "unit", "location"]
-# Columns compared numerically (np.allclose, NaN-safe).
+# Columns compared numerically (exact equality, NaN-safe).
 _NUMERIC_COLS = ["amount", "uncertainty_type", "loc", "scale", "minimum", "maximum"]
 
 
-def load(repo=None):
-    repo = repo or REPO
+TESTED_REVISION = "c5aee15"
+
+
+def check_data_layout(repo):
+    """Fail early unless `repo` uses the one-folder-per-sector layout
+    (data/02-electricity/, ..., data/99-obsolete/) this toolkit was built
+    and validated on. sentier-inventory switched to one folder per source
+    with `sector` as a column on 13 October 2026; on that layout the
+    loaders would find no sector folders, or silently stop skipping
+    obsolete processes (787 families instead of 766)."""
     if not os.path.isdir(repo):
         raise FileNotFoundError(
             f"sentier-inventory not found at: {repo}\n"
@@ -63,6 +71,17 @@ def load(repo=None):
             f"...and place the 'sentier-inventory' folder next to bafu-copied-processes/src/, "
             f"or set BAFU_DATA_ROOT / pass --data-root."
         )
+    if not os.path.isdir(os.path.join(repo, "data", "99-obsolete")):
+        raise RuntimeError(
+            f"{repo} does not use the per-sector folder layout this toolkit expects "
+            f"(no data/99-obsolete/). Check out the tested revision:\n"
+            f"    git -C {repo} checkout {TESTED_REVISION}"
+        )
+
+
+def load(repo=None):
+    repo = repo or REPO
+    check_data_layout(repo)
     all_p, all_e = [], []
     for d in sorted(glob.glob(os.path.join(repo, "data", "*/"))):
         sector = os.path.basename(d.rstrip("/"))
@@ -147,7 +166,11 @@ def build_family(P, E, reference_product):
     structure.insert(0, "slot_id", range(len(structure)))
 
     values = ex.merge(structure, on=STRUCT_COLS, how="left")
-    values = values[["process_id", "location", "slot_id"] + VALUE_COLS]
+    # A member can repeat a slot (same technology via two links, and even
+    # fully identical exchange rows), so (process_id, slot_id) is not
+    # unique on its own; `seq` numbers the repeats in source order.
+    values["seq"] = values.groupby(["process_id", "slot_id"]).cumcount()
+    values = values[["process_id", "location", "slot_id", "seq"] + VALUE_COLS]
 
     proc_meta = procs[["process_id", "location", "reference_unit", "reference_amount",
                         "process_type", "technology", "comment"]].copy()
@@ -200,11 +223,16 @@ def compare_rows(o, r, exact_cols=None, numeric_cols=None, verbose=True):
             if verbose:
                 print(f"  MISMATCH in column {col} ({(~same).sum()} rows)")
     for col in numeric_cols:
+        # Exact, not np.allclose: the model only moves values between
+        # tables, never computes them, so every number must come back
+        # bit-for-bit. allclose's default atol=1e-8 would also hide any
+        # change to the ~31k amounts that are themselves below 1e-8.
         a, b = o[col].astype(float).values, r[col].astype(float).values
-        if not np.allclose(a, b, equal_nan=True, rtol=1e-9):
+        same = (a == b) | (np.isnan(a) & np.isnan(b))
+        if not same.all():
             ok = False
             if verbose:
-                print(f"  MISMATCH in column {col}")
+                print(f"  MISMATCH in column {col} ({(~same).sum()} rows)")
     return ok
 
 

@@ -270,25 +270,33 @@ its values, solve the MILP using only the statistics of the remaining
 members, and compare the solved `(y, x)` against the real, held-out data —
 exactly the way the book checks its own worked example's optimal
 configuration (Figure E14.6c) against what a real design would look like.
-Tested on the family where this validation is actually meaningful (using the
+Only the 73 countries are held out and scored; the eight regional
+aggregates (RER, GLO, ENTSO-E, RAF, RAS, RLA, RME, RNA) stay in the
+training data but are blends of those countries, not independent members.
+Where a member uses one technology through several links (e.g. CH and
+RER), its amounts are summed before comparing. F1 is defined for every
+country (0 when nothing overlaps), so the mean includes every miss. Tested
+on the family where this validation is actually meaningful (using the
 open-source CBC solver via `pulp`, all instances solved to proven
-optimality):
+optimality, sentier-inventory revision `c5aee15`):
 
-| Family | Locations | Mean MAE (ours) | "predict nothing active" baseline MAE | Activation precision | Activation recall | Activation F1 |
-|---|---|---|---|---|---|---|
-| Electricity, production mix | 81 | 0.0603 | 0.0472 (not a valid recipe — doesn't sum to 1) | 0.553 | 0.767 | 0.598 |
+| Family | Countries | Mean MAE (ours) | "predict nothing active" baseline MAE | Activation precision | Activation recall | Activation F1 | Majority-baseline F1 |
+|---|---|---|---|---|---|---|---|
+| Electricity, production mix | 73 | 0.0592 | 0.0472 (not a valid recipe — doesn't sum to 1) | 0.593 | 0.602 | 0.579 | **0.804** |
 
-We report this honestly rather than cherry-picking: on raw mean absolute
-error alone, the "predict every technology inactive" baseline sometimes
-beats our optimizer on the sparser production-mix family — but that
-baseline isn't a valid answer at all, since it violates the mass-balance
-constraint (it doesn't sum to 1 kWh of production). MAE alone is misleading
-on a sparse family for exactly this reason, which is why we also report
-technology-**activation** precision/recall: of the technologies a country
-actually uses, our method correctly identifies 77% of them from zero
-location-specific information — purely from the structural envelope learned
-from every other member of the family — while always returning a
-structurally valid, mass-balanced recipe.
+**The MILP does not beat a simple baseline on technology activation.**
+Switching on every technology that at least half of the other members use
+reaches F1 0.804; the MILP reaches 0.579 and beats the baseline for only
+3 of the 73 countries. Raw MAE is no better a case for it: the "predict
+every technology inactive" baseline has lower MAE, although it isn't a
+valid recipe at all (it doesn't sum to 1 kWh of production). What the MILP
+adds today is a recipe that is always mass-balanced and inside the range
+other members show; it does not yet pick the right technologies better
+than counting how often each one is used. Earlier versions of this report
+gave F1 0.598 and recall 0.767; those numbers scored the regional
+aggregates as if they were countries, kept only one row when a member
+used a technology through several links, and left undefined F1 values out
+of the mean.
 
 **Why "Natural gas, at production onshore" is not reported here.** An
 earlier version of this report also benchmarked that family (MAE 0.0311,
@@ -298,10 +306,11 @@ units (kg, MJ, Nm3, tkm, ...), and its real members legitimately sum to
 anywhere from ~2 to ~6, not ~1 — so forcing sum-to-one there is not a
 physical constraint at all, and the resulting F1/MAE for that family is not
 a meaningful forecast-quality number, however good it looks. The code now
-detects this (`_homogeneous_unit_inputs` in `forecast_superstructure.py`)
-and skips the mass-balance constraint entirely for any family whose input
-slots don't share one unit; `Natural gas, at production onshore` is one
-such family, so its leave-one-out numbers are no longer reported as a
+detects this (`_is_share_family` in `forecast_superstructure.py`) and
+skips the mass-balance constraint entirely for any family whose input
+slots don't share one unit, and also for same-unit families where most
+members' inputs don't sum to ~1 (quantities, not shares); `Natural gas,
+at production onshore` is one such family, so its leave-one-out numbers are no longer reported as a
 validated benchmark result. The tool still runs on it (`bafu.py forecast
 --reference-product "Natural gas, at production onshore"`) and will print a
 warning to that effect — useful for exploration, not for citing as a
@@ -325,20 +334,21 @@ America/Latin America/Oceania, resolved from the location code by `geo.py`,
 falling back to the global mean for any slot with fewer than 3 same-region
 data points), instead of the whole family.
 
-| Family | Anchor | Mean MAE | Precision | Recall | F1 |
-|---|---|---|---|---|---|
-| Electricity, production mix | global | 0.0603 | 0.553 | 0.767 | 0.598 |
-| Electricity, production mix | regional | 0.0564 | 0.595 | 0.650 | 0.589 |
+| Family | Anchor | Mean MAE | Precision | Recall | F1 | Majority-baseline F1 |
+|---|---|---|---|---|---|---|
+| Electricity, production mix | global | 0.0592 | 0.593 | 0.602 | 0.579 | 0.804 |
+| Electricity, production mix | regional | 0.0529 | 0.648 | 0.566 | 0.588 | 0.804 |
 
 (As above, "Natural gas, at production onshore" is excluded from this
 comparison — its mixed-unit inputs make the mass-balance constraint, and so
 this whole validation, inapplicable.)
 
 Reported honestly rather than as a clean win: on production mix, regional
-anchoring lowers MAE (0.0603 → 0.0564, a real improvement — France's own
-MAE drops from 0.0460 to 0.0439 and its F1 jumps from 0.598 to 0.750) and
-raises precision, but at a recall cost, so aggregate F1 is essentially flat
-(0.598 → 0.589) — the model gets choosier and activates fewer unlikely
+anchoring lowers MAE (0.0592 → 0.0529, a real improvement — France's own
+MAE drops from 0.0667 to 0.0493, its F1 stays at 0.769) and raises
+precision, but at a recall cost, so aggregate F1 is essentially flat
+(0.579 → 0.588) and still well below the majority baseline (0.804) — the
+model gets choosier and activates fewer unlikely
 technologies, which helps outliers like France but slightly under-activates
 elsewhere. This confirms the improvement helps exactly where we designed it
 to help (genuine regional outliers) without being a universal fix — the
@@ -387,7 +397,9 @@ uncertainty parameters).
 
 Tested across **all 766 families** with `full_run.py`:
 
-- 766/766 families: row count and content matched exactly, 0 failures.
+- 766/766 families: row count and content matched exactly (numbers by
+  exact equality, no tolerance), 0 failures. Run against sentier-inventory
+  revision `c5aee15`; later revisions use a different folder layout.
 - Total original exchange rows (for these 766 families): **129,687**
 - Compact model → structure rows (stored once): **25,732** (19.8%)
 - Compact model → value rows (numeric/id, no string metadata): **129,687**
@@ -436,9 +448,11 @@ for just one:
    the data-quality check in issue #41.
 3. **Stretch goal (backcasting/forecasting) — done, with room to improve:**
    `forecast_superstructure.py` solves it via superstructure MILP
-   optimization, leave-one-out validated on two families (71–77% technology
-   -activation recall, always a mass-balance-valid recipe). Next
-   refinement: anchor the objective to a *specific* known neighbor or
+   optimization, leave-one-out validated on the electricity production mix
+   (activation F1 0.58, always a mass-balance-valid recipe). A majority
+   baseline still does better (F1 0.80), so the first refinement is to
+   use that baseline's activation as a starting point or constraint.
+   After that: anchor the objective to a *specific* known neighbor or
    trend (e.g. the same location's own earlier time period, or its nearest
    geographic neighbors) instead of the family-wide mean — this should
    sharpen quantitative accuracy for outlier members like France's

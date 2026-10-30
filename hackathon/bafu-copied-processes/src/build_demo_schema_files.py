@@ -23,7 +23,7 @@ import pandas as pd
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, THIS_DIR)
-from model import compare_rows  # noqa: E402
+from model import check_data_layout, compare_rows  # noqa: E402
 
 TOOLKIT_ROOT = os.path.dirname(THIS_DIR)
 DEFAULT_REPO = os.path.join(TOOLKIT_ROOT, "sentier-inventory")
@@ -64,6 +64,7 @@ def main(argv=None):
     out_dir = args.out or os.path.join(TOOLKIT_ROOT, "demo-schema-output", "data", sector)
     os.makedirs(out_dir, exist_ok=True)
 
+    check_data_layout(repo)
     d = os.path.join(repo, "data", sector)
     if not os.path.isdir(d):
         raise FileNotFoundError(
@@ -113,7 +114,9 @@ def main(argv=None):
         structure.insert(0, "family_id", fid)
 
         values = ex.merge(structure.drop(columns=["family_id"]), on=STRUCT_COLS, how="left")
-        values = values[["process_id", "location", "time_tag", "slot_id"] + VALUE_COLS]
+        # (process_id, slot_id) repeats -- see values.yaml `seq`.
+        values["seq"] = values.groupby(["process_id", "slot_id"]).cumcount()
+        values = values[["process_id", "location", "time_tag", "slot_id", "seq"] + VALUE_COLS]
         values.insert(0, "family_id", fid)
 
         merged = values.merge(structure, on=["family_id", "slot_id"], how="left")

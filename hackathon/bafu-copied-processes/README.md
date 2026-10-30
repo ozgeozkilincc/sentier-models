@@ -79,14 +79,22 @@ runnable check rather than taken on trust from the model:
 
 ```bash
 # 1) Clone sentier-inventory INSIDE this folder (same level as bafu-copied-processes/'s own contents)
+#    and check out the revision this toolkit was tested on
 cd bafu-copied-processes
 git clone https://github.com/sentier-dev/sentier-inventory
+git -C sentier-inventory checkout c5aee15
 
 # 2) Python dependencies
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+**Use revision `c5aee15` of sentier-inventory.** On 13 October 2026
+sentier-inventory moved from one folder per sector (`data/02-electricity/`,
+…, `data/99-obsolete/`) to one folder per source with `sector` as a column.
+The scripts are written for the per-sector layout and stop with a message
+pointing to `c5aee15` if they find the newer one.
 
 The folder layout should now look like this:
 
@@ -162,8 +170,9 @@ prints the compression statistics.
 python full_run.py
 ```
 
-Rebuilds every classified family and checks that row counts match, then
-prints the total structure/value row ratio.
+Rebuilds every classified family, compares every column of every row with
+the original `exchanges.parquet` (numbers by exact equality, no tolerance),
+then prints the total structure/value row ratio.
 
 ## Step 3b — The time axis (the "adapted for time" part of the issue)
 
@@ -187,22 +196,30 @@ Programming" and Example 14.6 "Reaction Synthesis via MINLP"): a binary
 variable per candidate technology (used or not) and a continuous variable
 for its share, linked by the same big-M constraint the book uses for
 flowsheet synthesis (`x <= U*y`), plus bounds learned from the other family
-members and -- **only for families whose technosphere inputs all share one
-unit** (e.g. electricity mixes, where every input is a share of 1 kWh) -- a
-mass-balance constraint (shares sum to 1). A family like "Natural gas, at
-production onshore" mixes kg/MJ/Nm3/tkm inputs that legitimately sum to
-~2-6, not ~1, so the constraint is skipped there
-(`_homogeneous_unit_inputs` in `forecast_superstructure.py`) rather than
-imposed anyway; its leave-one-out numbers are therefore not reported as a
-validated benchmark result (see REPORT.md).
+members and -- **only for share families** -- a mass-balance constraint
+(shares sum to 1). A share family has one unit for all its technosphere
+inputs (e.g. electricity mixes, where every input is a share of 1 kWh)
+*and* most of its members' inputs really sum to ~1 (`_is_share_family` in
+`forecast_superstructure.py`). A family like "Natural gas, at production
+onshore" mixes kg/MJ/Nm3/tkm inputs that legitimately sum to ~2-6, and some
+same-unit families have inputs that are quantities rather than shares, so
+the constraint is skipped there rather than imposed anyway; their
+leave-one-out numbers are therefore not reported as a validated benchmark
+result (see REPORT.md).
 
-For every real location in the family, it hides that location's data,
-solves the MILP using only the *other* locations, and compares the result
-against the real (held-out) values -- a leave-one-out validation of
-"can we synthesize a member we don't have data for." Needs `pulp` (in
-`requirements.txt`; bundles the open-source CBC solver, nothing else to
-install). Use `--target-location XX` to see one country's full
-slot-by-slot comparison instead of the summary table.
+For every country in the family, it hides that country's data, solves the
+MILP using only the *other* members, and compares the result against the
+real (held-out) values -- a leave-one-out validation of "can we synthesize
+a member we don't have data for." Regional aggregates (RER, GLO, ENTSO-E,
+...) stay in the training data but are not held out and scored, since they
+are blends of the countries being scored. When a member uses the same
+technology through several links (e.g. CH and RER), its amounts are summed
+before comparing. Results are reported next to a simple majority baseline
+(switch on every technology used by at least half of the other members),
+which the MILP currently does *not* beat on technology activation -- see
+REPORT.md. Needs `pulp<4` (in `requirements.txt`; bundles the open-source
+CBC solver, nothing else to install). Use `--target-location XX` to see
+one country's full slot-by-slot comparison instead of the summary table.
 
 By default the objective anchors on same-region neighbors first (`geo.py`
 resolves a location to Europe/Asia/Africa/North America/Latin
@@ -259,6 +276,18 @@ python ../validate/demo_score.py --files-dir ./bafu-files-original --process "El
 
 If `compare_multi.py` prints `OK` on every row, the model doesn't change the
 real LCA result at all.
+
+## Tests
+
+```bash
+python -m pytest tests
+```
+
+The tests use small synthetic tables, so they need neither the
+sentier-inventory clone nor network access. They cover the round trip
+(including repeated slots, duplicate exchange rows, a different link
+location and amounts below 1e-8), the uniqueness of the `values` key, the
+forecast scoring and the share-family check.
 
 ## Files
 

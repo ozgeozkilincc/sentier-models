@@ -52,6 +52,13 @@ _CONTINENT_TO_REGION = {
 _cache = {}
 
 
+def is_aggregate(location_code: str) -> bool:
+    """True for a regional/global aggregate (RER, GLO, ENTSO-E, ...) rather
+    than a single country. An aggregate is a blend of the countries in the
+    same family, so it is not an independent member to hold out and score."""
+    return location_code in _AGGREGATE_REGIONS
+
+
 def region_of(location_code: str):
     """Return a coarse region bucket for a sentier-inventory location code,
     or None if it can't be resolved (e.g. GLO, or an unrecognized code)."""

@@ -67,13 +67,41 @@ import pulp
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, THIS_DIR)
 from model import load, build_family  # noqa: E402
-from geo import region_of  # noqa: E402
+from geo import is_aggregate, region_of  # noqa: E402
 
 EPS_ACTIVE = 1e-4          # minimum nonzero amount once a slot is "on" (avoids on-but-~0 degeneracy)
 BIG_M_MARGIN = 1.5         # headroom above the max historical value used as each slot's big-M bound
 MASS_BALANCE_TOL = 0.02    # how far Sum(x_input) may sit from 1.0 (real data isn't exactly 1.0 either)
 MIN_REGIONAL_N = 3         # need at least this many same-region training points before trusting them
                             # over the global mean for a given slot (see geo.py)
+ACTIVE_THRESHOLD = 1e-6    # an amount above this counts as "technology used" when scoring
+BASELINE_MIN_SHARE = 0.5   # majority baseline: a slot is on if at least this fraction of
+                            # training members use it
+
+
+def _member_slot_amounts(values):
+    """One row per (process_id, location, slot_id) with the slot's TOTAL amount.
+
+    A member can carry the same slot more than once (the same technology
+    linked to two upstream locations, e.g. CH and RER), so values.parquet
+    has repeated (process_id, slot_id) rows. Taking one of them (as an
+    earlier dict(zip(...)) did, which kept only the last row) understates
+    that member's real share of the technology; summing gives the share."""
+    return values.groupby(["process_id", "location", "slot_id"], as_index=False)["amount"].sum()
+
+
+def _activation_scores(real_active, predicted_active):
+    """Precision/recall/F1 of which slots were switched on. Always defined:
+    F1 = 2*tp / (|predicted| + |real|), which is 0 (not NaN) when nothing
+    overlaps, so a total miss counts against the mean instead of being
+    silently skipped by it."""
+    tp = len(real_active & predicted_active)
+    if not real_active and not predicted_active:
+        return 1.0, 1.0, 1.0
+    precision = tp / len(predicted_active) if predicted_active else 0.0
+    recall = tp / len(real_active) if real_active else 0.0
+    f1 = 2 * tp / (len(predicted_active) + len(real_active))
+    return precision, recall, f1
 
 
 def _homogeneous_unit_inputs(structure):
@@ -97,6 +125,25 @@ def _homogeneous_unit_inputs(structure):
     return len(input_units) <= 1
 
 
+def _is_share_family(structure, member_amounts):
+    """True iff the sum-to-one constraint describes this family: its inputs
+    share one unit (see _homogeneous_unit_inputs) AND most of the given
+    members' inputs really do sum to ~1. A shared unit alone is not enough:
+    there are same-unit families where no member sums to one (the inputs
+    are quantities, not shares), and forcing sum-to-one there is as
+    arbitrary as it is for a mixed-unit family. Pass training members only,
+    so the held-out member never decides its own constraints."""
+    if not _homogeneous_unit_inputs(structure):
+        return False
+    input_slots = structure.loc[structure["direction"] == "input", "slot_id"]
+    inputs = member_amounts[member_amounts["slot_id"].isin(input_slots)]
+    totals = inputs.groupby("process_id")["amount"].sum()
+    if totals.empty:
+        return False
+    sums_to_one = (totals - 1).abs() <= MASS_BALANCE_TOL
+    return bool(sums_to_one.mean() >= 0.5)
+
+
 def solve_member(structure, values, proc_meta, target_location, anchor="regional", verbose=False):
     """
     Hold out `target_location`, solve for its (y, x) via a MILP built on the
@@ -116,10 +163,10 @@ def solve_member(structure, values, proc_meta, target_location, anchor="regional
     """
     output_slots = structure[structure["direction"] == "output"]["slot_id"].tolist()
     input_slots = structure[structure["direction"] == "input"]["slot_id"].tolist()
-    apply_mass_balance = _homogeneous_unit_inputs(structure)
-
-    train = values[values["location"] != target_location]
-    real = values[values["location"] == target_location]
+    member_amounts = _member_slot_amounts(values)
+    train = member_amounts[member_amounts["location"] != target_location]
+    real = member_amounts[member_amounts["location"] == target_location]
+    apply_mass_balance = _is_share_family(structure, train)
 
     target_region = region_of(target_location)
     if anchor == "regional" and target_region is not None:
@@ -145,6 +192,7 @@ def solve_member(structure, values, proc_meta, target_location, anchor="regional
             ref_source = "global"
         stats[s] = {
             "n": len(col_all),
+            "used_share": (col_all > ACTIVE_THRESHOLD).sum() / train["process_id"].nunique(),
             "min": float(col_all.min()),
             "max": float(col_all.max()),
             "mean": ref_mean,
@@ -175,11 +223,12 @@ def solve_member(structure, values, proc_meta, target_location, anchor="regional
 
     # --- Mass balance: the technosphere shares must sum to ~1 (same role
     #     as the HDA example's node-by-node component balances) -- ONLY
-    #     when every input slot shares one unit (see _homogeneous_unit_inputs
-    #     docstring). For a mixed-unit family (e.g. kg + MJ + Nm3 + tkm
-    #     inputs to "Natural gas, at production onshore", which legitimately
-    #     sum to ~2-6, not ~1) this constraint would be physically
-    #     meaningless, so it is skipped entirely rather than imposed anyway. ---
+    #     for a share family (see _is_share_family): one input unit, and
+    #     the training members really sum to ~1. For a mixed-unit family
+    #     (e.g. kg + MJ + Nm3 + tkm inputs to "Natural gas, at production
+    #     onshore", which legitimately sum to ~2-6, not ~1), or a same-unit
+    #     family whose inputs are quantities rather than shares, this
+    #     constraint would be meaningless, so it is skipped entirely. ---
     if apply_mass_balance:
         total_input = pulp.lpSum(x[s] for s in candidate_slots)
         prob += total_input <= 1 + MASS_BALANCE_TOL, "mass_balance_upper"
@@ -231,24 +280,28 @@ def solve_member(structure, values, proc_meta, target_location, anchor="regional
     # turn on/off) -- a fairer metric than MAE alone on a sparse family,
     # since "predict everything zero" scores well on MAE but is not even a
     # valid recipe (it violates the mass-balance constraint by construction).
-    real_active = set(comparison[comparison["real_amount"] > 1e-6]["slot_id"])
-    solved_active = set(comparison[comparison["solved_amount"].fillna(0) > 1e-6]["slot_id"])
-    tp = len(real_active & solved_active)
-    precision = tp / len(solved_active) if solved_active else np.nan
-    recall = tp / len(real_active) if real_active else np.nan
-    f1 = (2 * precision * recall / (precision + recall)) if (precision and recall) else np.nan
+    real_active = set(comparison[comparison["real_amount"] > ACTIVE_THRESHOLD]["slot_id"])
+    solved_active = set(comparison[comparison["solved_amount"].fillna(0) > ACTIVE_THRESHOLD]["slot_id"])
+    precision, recall, f1 = _activation_scores(real_active, solved_active)
+
+    # Majority baseline: switch on every technology that at least half of
+    # the training members use. No optimisation, no regional anchoring --
+    # the bar the MILP has to clear for its activation scores to mean much.
+    baseline_active = {s for s in candidate_slots if stats[s]["used_share"] >= BASELINE_MIN_SHARE}
+    _, _, baseline_f1 = _activation_scores(real_active, baseline_active)
 
     if verbose:
         n_regional = sum(1 for s in stats.values() if s["ref_source"] == "regional")
         print(f"\n=== {target_location} (region: {target_region}, anchor: {anchor}, status: {status}) ===")
         print(f"candidate slots: {len(candidate_slots)}  |  unseen-elsewhere slots: {len(unseen_but_real)}  "
               f"|  slots anchored on regional data: {n_regional}/{len(candidate_slots)}  "
-              f"|  mass-balance constraint: {'applied (same-unit inputs)' if apply_mass_balance else 'SKIPPED (mixed-unit inputs -- see _homogeneous_unit_inputs)'}")
+              f"|  mass-balance constraint: {'applied (share family)' if apply_mass_balance else 'SKIPPED (not a share family -- see _is_share_family)'}")
         print(comparison.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
         print(f"MAE (over resolvable slots): {mae:.4f}")
-        print(f"Technology activation -- precision: {precision:.3f}  recall: {recall:.3f}  F1: {f1:.3f}")
+        print(f"Technology activation -- precision: {precision:.3f}  recall: {recall:.3f}  F1: {f1:.3f}  "
+              f"(majority baseline F1: {baseline_f1:.3f})")
         if not apply_mass_balance:
-            print("NOTE: mixed-unit family -- mass balance not applicable, "
+            print("NOTE: not a share family -- mass balance not applicable, "
                   "and this family's F1/MAE should not be reported as a validated benchmark (see README).")
 
     return {
@@ -258,6 +311,7 @@ def solve_member(structure, values, proc_meta, target_location, anchor="regional
         "precision": precision,
         "recall": recall,
         "f1": f1,
+        "baseline_f1": baseline_f1,
         "n_candidate_slots": len(candidate_slots),
         "n_unseen_elsewhere": len(unseen_but_real),
         "mass_balance_applied": apply_mass_balance,
@@ -266,10 +320,14 @@ def solve_member(structure, values, proc_meta, target_location, anchor="regional
 
 
 def leave_one_out(reference_product, repo=None, locations=None, anchor="regional", verbose=False):
+    """Hold out each country in turn. Regional aggregates (RER, GLO, ...)
+    stay in the training data but are not held out and scored: they are
+    blends of the countries already scored, not independent members.
+    Pass `locations` to choose the targets yourself."""
     P, E = load(repo)
     structure, values, proc_meta = build_family(P, E, reference_product)
 
-    all_locations = proc_meta["location"].tolist()
+    all_locations = [loc for loc in proc_meta["location"] if not is_aggregate(loc)]
     targets = locations or all_locations
 
     results = []
@@ -287,6 +345,7 @@ def leave_one_out(reference_product, repo=None, locations=None, anchor="regional
         "precision": r["precision"],
         "recall": r["recall"],
         "f1": r["f1"],
+        "baseline_f1": r["baseline_f1"],
         "candidate_slots": r["n_candidate_slots"],
         "unseen_elsewhere": r["n_unseen_elsewhere"],
         "mass_balance_applied": r["mass_balance_applied"],
@@ -301,7 +360,8 @@ def zero_baseline_mae(reference_product, repo=None):
     P, E = load(repo)
     structure, values, proc_meta = build_family(P, E, reference_product)
     input_slots = structure[structure["direction"] == "input"]["slot_id"].tolist()
-    v = values[values["slot_id"].isin(input_slots)]
+    v = _member_slot_amounts(values)
+    v = v[v["slot_id"].isin(input_slots) & ~v["location"].map(is_aggregate)]
     per_loc = v.groupby("location")["amount"].apply(lambda s: s.abs().sum() / len(input_slots))
     return per_loc.mean()
 
@@ -339,8 +399,8 @@ def main(argv=None):
 
     mixed_unit = not bool(summary["mass_balance_applied"].all()) if len(summary) else False
     if mixed_unit:
-        print(f"\nNOTE: '{args.reference_product}' has mixed-unit technosphere inputs (see "
-              f"_homogeneous_unit_inputs in forecast_superstructure.py), so the sum-to-one "
+        print(f"\nNOTE: '{args.reference_product}' is not a share family (see "
+              f"_is_share_family in forecast_superstructure.py), so the sum-to-one "
               f"mass-balance constraint was NOT applied and the numbers below are NOT a "
               f"validated benchmark result -- do not report them as one (see README / PR review).")
 
@@ -354,6 +414,8 @@ def main(argv=None):
     print(f"Technology-activation recall   : {summary['recall'].mean():.3f}   "
           f"(of the technologies really used, fraction we correctly activated)")
     print(f"Technology-activation F1       : {summary['f1'].mean():.3f}")
+    print(f"Majority-baseline F1           : {summary['baseline_f1'].mean():.3f}   "
+          f"(switch on every technology used by at least half of the other members)")
 
 
 if __name__ == "__main__":
