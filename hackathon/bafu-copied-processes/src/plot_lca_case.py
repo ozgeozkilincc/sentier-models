@@ -7,11 +7,12 @@ The story this chart tells:
     rest of the family).
   - If you had NO data for France (the situation this tool is meant for),
     a global-average-anchored forecast badly underestimates nuclear and
-    invents a natural-gas dependency that isn't really there.
-  - A regional-anchored forecast (same-region neighbors) gets closer on
-    nuclear and correctly drops the natural-gas share to zero -- but BOTH
-    forecasts invent an ~17% lignite share that doesn't exist in the real
-    data. That's an honest limitation, called out directly on the chart.
+    gives natural gas several times its real share.
+  - A regional-anchored forecast (same-region neighbors) gets somewhat
+    closer on both, but still falls far short on nuclear and still
+    overstates natural gas. That's an honest limitation, called out
+    directly on the chart (the callout numbers are computed from the
+    forecast, not written in by hand).
 
 This is what an LCA analyst actually cares about: not the F1/MAE numbers
 in the abstract, but "if my product's supply chain needs France's
@@ -102,11 +103,14 @@ def main(reference_product="Electricity, production mix", target_location="FR",
         name = row["flow_name"]
         if name not in LABELS:
             continue
+        regional = cr.loc[slot_id, "solved_amount"] if slot_id in cr.index else 0.0
+        if max(row["real_amount"], row["solved_amount"], regional) <= 0:
+            continue  # nobody uses it -- an empty row tells the reader nothing
         rows.append({
             "label": LABELS[name],
             "real": row["real_amount"],
             "global": row["solved_amount"],
-            "regional": cr.loc[slot_id, "solved_amount"] if slot_id in cr.index else 0.0,
+            "regional": regional,
         })
     rows.sort(key=lambda d: d["real"], reverse=True)
 
@@ -159,21 +163,23 @@ def main(reference_product="Electricity, production mix", target_location="FR",
 
     # --- Two callouts carry the honest story, right where the eye already is ---
     nuclear_i = labels.index("Nuclear")
-    lignite_i = labels.index("Lignite")
-    y_nuclear, y_lignite = y[nuclear_i], y[lignite_i]
+    gas_i = labels.index("Natural gas")
+    y_nuclear, y_gas = y[nuclear_i], y[gas_i]
 
     ax.annotate(
-        "Real value is 63% --\nboth forecasts fall well short",
+        f"Real value is {real_vals[nuclear_i]:.0f}% -- both forecasts fall well\n"
+        f"short ({global_vals[nuclear_i]:.0f}% global, {regional_vals[nuclear_i]:.0f}% regional)",
         xy=(global_vals[nuclear_i] + 1, y_nuclear),
-        xytext=(38, y_nuclear + 1.55),
+        xytext=(30, y_nuclear - 1.05),
         fontsize=9.3, color=COLOR_CALLOUT, ha="left",
         arrowprops=dict(arrowstyle="-", color=COLOR_CALLOUT, lw=1.1,
                          connectionstyle="arc3,rad=0.15"),
     )
     ax.annotate(
-        "Both forecasts invent a ~17% lignite\nshare -- real value is 0%",
-        xy=(max(global_vals[lignite_i], regional_vals[lignite_i]) + 1, y_lignite),
-        xytext=(25, y_lignite + 1.2),
+        f"Real value is {real_vals[gas_i]:.0f}% -- forecasts give\n"
+        f"{global_vals[gas_i]:.0f}% (global) and {regional_vals[gas_i]:.0f}% (regional)",
+        xy=(max(global_vals[gas_i], regional_vals[gas_i]) + 1, y_gas),
+        xytext=(36, y_gas - 1.45),
         fontsize=9.3, color=COLOR_CALLOUT, ha="left",
         arrowprops=dict(arrowstyle="-", color=COLOR_CALLOUT, lw=1.1,
                          connectionstyle="arc3,rad=-0.15"),
@@ -208,7 +214,7 @@ def main(reference_product="Electricity, production mix", target_location="FR",
         fontsize=7.5, color=COLOR_MUTED,
     )
 
-    fig.tight_layout(rect=[0.01, 0.035, 0.99, 0.80])
+    fig.tight_layout(rect=[0.01, 0.035, 0.99, 0.835])
 
     out_path = out_path or os.path.join(THIS_DIR, "..", "france_lca_case.png")
     out_path = os.path.abspath(out_path)
